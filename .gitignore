@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+.pytest_cache/
+.yarn/*
+!.yarn/releases/
+!.yarn/releases/yarn-*.cjs
+.google-tv-protocol/
+.librecontrol/
+.libretv/
+.env
+.DS_Store

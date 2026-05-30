@@ -1,0 +1,172 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: Optional note for this manual release.
+        required: false
+        default: ""
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  checks: read
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+env:
+  RELEASE_ALLOWED_ACTORS: "usrivastava92"
+
+jobs:
+  authorize:
+    name: Authorize actor
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check triggering actor against allow-list
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+          ALLOWED: ${{ env.RELEASE_ALLOWED_ACTORS }}
+        run: |
+          echo "Triggered by: $ACTOR"
+          echo "Allow-list:   $ALLOWED"
+          if printf '%s' ",$ALLOWED," | tr -d ' ' | grep -q ",${ACTOR},"; then
+            echo "$ACTOR is authorized to trigger releases."
+          else
+            echo "$ACTOR is NOT in RELEASE_ALLOWED_ACTORS." >&2
+            echo "Update the allow-list in .github/workflows/release.yml if needed." >&2
+            exit 1
+          fi
+
+  verify-ci:
+    name: Verify CI passed
+    needs: authorize
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure target commit passed CI build
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const ref = context.sha;
+            const { data } = await github.rest.checks.listForRef({
+              owner,
+              repo,
+              ref,
+              per_page: 100,
+            });
+
+            const buildCheck = data.check_runs.find((run) => run.name === 'Build');
+
+            if (!buildCheck) {
+              core.setFailed(`No 'Build' check found for ${ref}. Run CI on this commit before releasing.`);
+              return;
+            }
+
+            if (buildCheck.status !== 'completed' || buildCheck.conclusion !== 'success') {
+              core.setFailed(
+                `'Build' check for ${ref} is ${buildCheck.status}/${buildCheck.conclusion ?? 'null'}. ` +
+                  `Release requires a successful CI run first.`,
+              );
+            }
+
+  release-auto:
+    name: Release npm package
+    if: |
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify release token
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "RELEASE_TOKEN secret is required so semantic-release can push release commits to protected main." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: yarn
+
+      - run: corepack enable
+      - run: yarn install --immutable
+
+      - name: Install npm with OIDC support
+        run: npm install --global npm@11.5.1
+
+      - run: yarn build
+
+      - name: Semantic Release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          npm --version
+          yarn semantic-release
+
+  release-manual:
+    name: Release npm package (manual)
+    needs: verify-ci
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Record trigger reason
+        if: ${{ inputs.reason != '' }}
+        run: echo "Manual release reason - ${{ inputs.reason }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify release token
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "RELEASE_TOKEN secret is required so semantic-release can push release commits to protected main." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: yarn
+
+      - run: corepack enable
+      - run: yarn install --immutable
+
+      - name: Install npm with OIDC support
+        run: npm install --global npm@11.5.1
+
+      - run: yarn build
+
+      - name: Semantic Release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          npm --version
+          yarn semantic-release

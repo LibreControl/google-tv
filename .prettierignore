@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.git/
+.yarn/
+.librecontrol/
+.libretv/
+.google-tv-protocol/
+.pytest_cache/
+yarn.lock
