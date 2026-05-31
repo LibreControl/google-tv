@@ -1,6 +1,6 @@
 {
   "name": "@librecontrol/google-tv",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Google TV adapter for the LibreControl universal device control stack.",
   "type": "module",
   "packageManager": "yarn@4.9.2",
