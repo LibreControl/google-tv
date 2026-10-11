@@ -122,6 +122,18 @@ closes, fails, or is replaced while waiting. Disconnecting clears cached metadat
 reconnecting requires fresh metadata. A resolved text call means the frame was
 sent, not that the TV's focused application accepted or displayed the text.
 
+### Pairing and connection ownership
+
+A directly constructed `PairingClient` belongs to its caller: call `close()` when
+finished, including after a failed `start()`. Adapter `startPairing()` closes its
+private client if starting fails; after success, the caller owns the returned
+pairing session and must call its `close()`. Rejected pairing sends release their
+reply subscriptions and timers and report the send failure without a second
+unhandled reply rejection.
+
+Closing a TLS transport also cancels an in-flight connection attempt. Frames and
+close/error events from a replaced socket cannot affect the current connection.
+
 ## Developer Docs
 
 - [Discovery](docs/discovery.md)

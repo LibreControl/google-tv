@@ -16,25 +16,39 @@ describe("RemoteClient", () => {
       await accepted;
       expect(server.acceptedText).toBe("こんにちは 🌍 café");
       expect(server.remoteMessages.find((message) => message.type === "text")).toEqual({
-        type: "text", text: "こんにちは 🌍 café", imeCounter: 37, fieldCounter: 59,
+        type: "text",
+        text: "こんにちは 🌍 café",
+        imeCounter: 37,
+        fieldCounter: 59,
       });
       const acceptedAgain = once(server, "textAccepted");
       await client.text("次の入力 🦊");
       await acceptedAgain;
       expect(server.acceptedText).toBe("次の入力 🦊");
       expect(server.remoteMessages.filter((message) => message.type === "text").at(-1)).toEqual({
-        type: "text", text: "次の入力 🦊", imeCounter: 37, fieldCounter: 60,
+        type: "text",
+        text: "次の入力 🦊",
+        imeCounter: 37,
+        fieldCounter: 60,
       });
       await client.command("home");
       const voice = await client.voiceBegin();
       expect(voice).toEqual({ sessionId: 100, packageName: "com.google.android.katniss" });
-      const ended = nextRemoteMessage(server, (message) => message.type === "voice" && message.phase === "end");
+      const ended = nextRemoteMessage(
+        server,
+        (message) => message.type === "voice" && message.phase === "end",
+      );
       await client.voiceStreamPcm(Uint8Array.from([1, 2, 3]), { chunkDelayMs: 0 });
       await client.voiceEnd();
       await ended;
       expect(server.remoteMessages.filter((message) => message.type === "voice")).toEqual([
         { type: "voice", phase: "begin", sessionId: 100 },
-        { type: "voice", phase: "payload", sessionId: 100, payload: padded(Uint8Array.from([1, 2, 3]), 8 * 1024) },
+        {
+          type: "voice",
+          phase: "payload",
+          sessionId: 100,
+          payload: padded(Uint8Array.from([1, 2, 3]), 8 * 1024),
+        },
         { type: "voice", phase: "end", sessionId: 100 },
       ]);
     } finally {
@@ -42,35 +56,46 @@ describe("RemoteClient", () => {
     }
   });
 
-  it.each([[71, 93], [0, 0]])("waits for deliberately delayed IME metadata (%i, %i) without blocking keys", async (imeCounter, fieldCounter) => {
-    const server = createFakeGoogleTvServer({ delayImeMetadata: true });
-    const client = new RemoteClient({ transport: server.createRemoteTransport() });
-    try {
-      await client.connect();
-      const text = client.text("漢字 🐈");
-      const key = nextRemoteMessage(server, (message) => message.type === "key");
-      await client.command("home");
-      await key;
-      expect(server.remoteMessages.some((message) => message.type === "text")).toBe(false);
-      const accepted = once(server, "textAccepted");
-      await server.sendImeMetadata(imeCounter, fieldCounter);
-      await text;
-      await accepted;
-      expect(server.acceptedText).toBe("漢字 🐈");
-      expect(server.remoteMessages.find((message) => message.type === "text")).toEqual({
-        type: "text", text: "漢字 🐈", imeCounter, fieldCounter,
-      });
-    } finally {
-      await client.close();
-    }
-  });
+  it.each([
+    [71, 93],
+    [0, 0],
+  ])(
+    "waits for deliberately delayed IME metadata (%i, %i) without blocking keys",
+    async (imeCounter, fieldCounter) => {
+      const server = createFakeGoogleTvServer({ delayImeMetadata: true });
+      const client = new RemoteClient({ transport: server.createRemoteTransport() });
+      try {
+        await client.connect();
+        const text = client.text("漢字 🐈");
+        const key = nextRemoteMessage(server, (message) => message.type === "key");
+        await client.command("home");
+        await key;
+        expect(server.remoteMessages.some((message) => message.type === "text")).toBe(false);
+        const accepted = once(server, "textAccepted");
+        await server.sendImeMetadata(imeCounter, fieldCounter);
+        await text;
+        await accepted;
+        expect(server.acceptedText).toBe("漢字 🐈");
+        expect(server.remoteMessages.find((message) => message.type === "text")).toEqual({
+          type: "text",
+          text: "漢字 🐈",
+          imeCounter,
+          fieldCounter,
+        });
+      } finally {
+        await client.close();
+      }
+    },
+  );
 
   it("rejects pending text on remote closure and uses fresh metadata on reconnect", async () => {
     const server = createFakeGoogleTvServer({ delayImeMetadata: true });
     const client = new RemoteClient({ transport: server.createRemoteTransport() });
     try {
       await client.connect();
-      const rejected = expect(client.text("old pending text")).rejects.toThrow("remote connection closed");
+      const rejected = expect(client.text("old pending text")).rejects.toThrow(
+        "remote connection closed",
+      );
       const closed = once(client, "close");
       await server.closeRemoteConnection();
       await closed;
@@ -86,7 +111,10 @@ describe("RemoteClient", () => {
       await text;
       await accepted;
       expect(server.remoteMessages.find((message) => message.type === "text")).toEqual({
-        type: "text", text: "新しい接続 🌱", imeCounter: 101, fieldCounter: 203,
+        type: "text",
+        text: "新しい接続 🌱",
+        imeCounter: 101,
+        fieldCounter: 203,
       });
     } finally {
       await client.close();
@@ -116,7 +144,10 @@ describe("RemoteClient", () => {
       await pending;
       await acceptedAgain;
       expect(server.remoteMessages.filter((message) => message.type === "text").at(-1)).toEqual({
-        type: "text", text: "second", imeCounter: 88, fieldCounter: 99,
+        type: "text",
+        text: "second",
+        imeCounter: 88,
+        fieldCounter: 99,
       });
     } finally {
       await client.close();
@@ -124,11 +155,15 @@ describe("RemoteClient", () => {
   });
 
   it("keeps key-only connections usable and fails text clearly without transmitting it", async () => {
-    const server = createFakeGoogleTvServer({ remoteFeatures: RemoteFeatures.key | RemoteFeatures.ping });
+    const server = createFakeGoogleTvServer({
+      remoteFeatures: RemoteFeatures.key | RemoteFeatures.ping,
+    });
     const client = new RemoteClient({ transport: server.createRemoteTransport() });
     try {
       await client.connect();
-      await expect(client.text("unsupported")).rejects.toThrow("did not advertise text input support");
+      await expect(client.text("unsupported")).rejects.toThrow(
+        "did not advertise text input support",
+      );
       const key = nextRemoteMessage(server, (message) => message.type === "key");
       await client.command("home");
       await key;
@@ -144,7 +179,9 @@ describe("RemoteClient", () => {
     const client = new RemoteClient({ transport: server.createRemoteTransport() });
     try {
       await client.connect();
-      const rejected = expect(client.text("missing metadata")).rejects.toThrow("timed out waiting for Android TV text input metadata");
+      const rejected = expect(client.text("missing metadata")).rejects.toThrow(
+        "timed out waiting for Android TV text input metadata",
+      );
       await vi.advanceTimersByTimeAsync(5_000);
       await rejected;
       expect(server.remoteMessages.some((message) => message.type === "text")).toBe(false);
@@ -160,7 +197,12 @@ describe("RemoteClient", () => {
     const client = new RemoteClient({ transport });
     client.on("error", () => {});
     transport.on("connect", () => {
-      void tv.send(encodeRemoteMessage({ type: "configure", features: RemoteFeatures.key | RemoteFeatures.ime }));
+      void tv.send(
+        encodeRemoteMessage({
+          type: "configure",
+          features: RemoteFeatures.key | RemoteFeatures.ime,
+        }),
+      );
       void tv.send(encodeRemoteMessage({ type: "ready", started: true }));
     });
     try {
@@ -182,7 +224,7 @@ async function nextRemoteMessage(
   predicate: (message: RemoteMessage) => boolean,
 ): Promise<RemoteMessage> {
   for (;;) {
-    const [message] = await once(server, "remoteMessage") as [RemoteMessage];
+    const [message] = (await once(server, "remoteMessage")) as [RemoteMessage];
     if (predicate(message)) return message;
   }
 }

@@ -34,21 +34,28 @@ export type TlsTransportOptions = {
   timeoutMs?: number;
 };
 
+type TlsConnection = {
+  socket: tls.TLSSocket;
+  ready: Promise<void>;
+  cancel: () => void;
+  connected: boolean;
+};
+
 export class NodeTlsTransport extends EventEmitter implements FrameTransport {
-  private socket?: tls.TLSSocket;
-  private readonly parser = new FrameParser();
+  private connection?: TlsConnection;
 
   constructor(private readonly options: TlsTransportOptions) {
     super();
   }
 
   connect(): Promise<void> {
-    if (this.socket) {
-      return Promise.resolve();
+    if (this.connection) {
+      return this.connection.ready;
     }
 
-    return new Promise((resolve, reject) => {
-      const socket = tls.connect({
+    let socket: tls.TLSSocket;
+    try {
+      socket = tls.connect({
         host: this.options.host,
         port: this.options.port,
         cert: this.options.cert,
@@ -56,46 +63,68 @@ export class NodeTlsTransport extends EventEmitter implements FrameTransport {
         ca: this.options.ca,
         rejectUnauthorized: this.options.rejectUnauthorized ?? false,
       });
-
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const parser = new FrameParser();
+    let cancel!: () => void;
+    const ready = new Promise<void>((resolve, reject) => {
+      const timeoutMs = this.options.timeoutMs ?? 15_000;
       const timer = setTimeout(() => {
-        socket.destroy(new Error(`TLS connection timed out after ${this.options.timeoutMs}ms`));
-      }, this.options.timeoutMs ?? 15_000);
+        socket.destroy(new Error(`TLS connection timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      cancel = () => {
+        clearTimeout(timer);
+        reject(new Error("TLS connection cancelled"));
+        socket.destroy();
+      };
 
       socket.once("secureConnect", () => {
         clearTimeout(timer);
-        this.socket = socket;
+        if (this.connection !== connection) return;
+        connection.connected = true;
         resolve();
       });
       socket.once("error", (error) => {
         clearTimeout(timer);
         socket.destroy();
+        if (this.connection !== connection) return;
         reject(error);
         // connect() owns pre-handshake failures; error events remain available to
         // subscribers, and established connections retain EventEmitter semantics.
-        if (this.socket === socket || this.listenerCount("error") > 0) {
+        if (connection.connected || this.listenerCount("error") > 0) {
           this.emit("error", error);
         }
       });
       socket.on("data", (chunk: Buffer) => {
-        for (const frame of this.parser.push(chunk)) {
+        if (this.connection !== connection) return;
+        for (const frame of parser.push(chunk)) {
+          // A subscriber can close or replace the connection during delivery.
+          if (this.connection !== connection) return;
           this.emit("frame", frame);
         }
       });
       socket.once("close", () => {
         clearTimeout(timer);
-        this.socket = undefined;
+        if (this.connection !== connection) return;
+        this.connection = undefined;
+        reject(new Error("TLS connection closed before handshake completed"));
         this.emit("close");
       });
     });
+    const connection: TlsConnection = { socket, ready, cancel, connected: false };
+    this.connection = connection;
+    return ready;
   }
 
   async send(frame: Uint8Array): Promise<void> {
-    if (!this.socket) {
+    const connection = this.connection;
+    if (!connection?.connected) {
       throw new Error("transport is not connected");
     }
 
     await new Promise<void>((resolve, reject) => {
-      this.socket!.write(encodeFrame(frame), (error) => {
+      connection.socket.write(encodeFrame(frame), (error) => {
         if (error) {
           reject(error);
         } else {
@@ -106,14 +135,16 @@ export class NodeTlsTransport extends EventEmitter implements FrameTransport {
   }
 
   async close(): Promise<void> {
-    const socket = this.socket;
-    this.socket = undefined;
-    socket?.end();
+    const connection = this.connection;
+    if (!connection) return;
+    this.connection = undefined;
+    connection.cancel();
+    this.emit("close");
   }
 
   getCertificates(): { local?: tls.PeerCertificate; peer?: tls.PeerCertificate } {
-    const local = this.socket?.getCertificate();
-    const peer = this.socket?.getPeerCertificate();
+    const local = this.connection?.socket.getCertificate();
+    const peer = this.connection?.socket.getPeerCertificate();
     return {
       local: local && "raw" in local ? local : undefined,
       peer: peer && "raw" in peer ? peer : undefined,

@@ -83,18 +83,14 @@ export class FakeGoogleTvServer extends EventEmitter {
     client.on("connect", async () => {
       await server.connect();
       this.imeMetadataSent = false;
-      await server.send(
-        encodeRemoteMessage({ type: "configure", features: this.remoteFeatures }),
-      );
+      await server.send(encodeRemoteMessage({ type: "configure", features: this.remoteFeatures }));
     });
     server.on("frame", async (frame) => {
       const message = decodeRemoteMessage(frame);
       this.remoteMessages.push(message);
       this.emit("remoteMessage", message);
       if (message.type === "configure") {
-        await server.send(
-          encodeRemoteMessage({ type: "set-active", active: message.features }),
-        );
+        await server.send(encodeRemoteMessage({ type: "set-active", active: message.features }));
       } else if (message.type === "set-active") {
         await server.send(encodeRemoteMessage({ type: "ready", started: true }));
         if (!this.delayImeMetadata && (this.remoteFeatures & RemoteFeatures.ime) !== 0) {
