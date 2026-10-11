@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { PairingClient } from "../src/client/PairingClient.js";
+import { derivePairingSecret } from "../src/codec/pairing.js";
 import { createFakeGoogleTvServer } from "../src/testing/FakeGoogleTvServer.js";
 
 describe("PairingClient", () => {
@@ -24,5 +26,20 @@ describe("PairingClient", () => {
 
     expect(result).toMatchObject({ type: "secret-ack", status: "bad-secret" });
     expect(server.paired).toBe(false);
+  });
+
+  it("preserves certificate hash validation for pairing codes", () => {
+    const certificates = {
+      local: { modulus: "AA", exponent: "010001" },
+      peer: { modulus: "BB", exponent: "010001" },
+    };
+    const hash = createHash("sha256").update(Buffer.from("AA010001BB010001C123", "hex")).digest();
+    const checksum = hash[0].toString(16).padStart(2, "0");
+    const invalidChecksum = (hash[0] ^ 0xff).toString(16).padStart(2, "0");
+
+    expect(derivePairingSecret(`${checksum}C123`, certificates)).toEqual(hash);
+    expect(() => derivePairingSecret(`${invalidChecksum}C123`, certificates)).toThrow(
+      "pairing code failed local certificate hash validation",
+    );
   });
 });

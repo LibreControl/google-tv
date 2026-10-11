@@ -68,8 +68,13 @@ export class NodeTlsTransport extends EventEmitter implements FrameTransport {
       });
       socket.once("error", (error) => {
         clearTimeout(timer);
-        this.emit("error", error);
+        socket.destroy();
         reject(error);
+        // connect() owns pre-handshake failures; error events remain available to
+        // subscribers, and established connections retain EventEmitter semantics.
+        if (this.socket === socket || this.listenerCount("error") > 0) {
+          this.emit("error", error);
+        }
       });
       socket.on("data", (chunk: Buffer) => {
         for (const frame of this.parser.push(chunk)) {
