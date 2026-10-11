@@ -94,6 +94,8 @@ export class PairingClient {
   }
 
   private async sendAndWait(message: PairingMessage): Promise<PairingMessage> {
+    const frame = encodePairingMessage(message);
+    let cleanup!: () => void;
     const reply = new Promise<PairingMessage>((resolve, reject) => {
       const timer = setTimeout(() => {
         cleanup();
@@ -115,7 +117,7 @@ export class PairingClient {
         cleanup();
         reject(new Error(`pairing connection closed while waiting for reply to ${message.type}`));
       };
-      const cleanup = () => {
+      cleanup = () => {
         clearTimeout(timer);
         this.transport.off("frame", onFrame);
         this.transport.off("error", onError);
@@ -125,7 +127,14 @@ export class PairingClient {
       this.transport.on("error", onError);
       this.transport.on("close", onClose);
     });
-    await this.transport.send(encodePairingMessage(message));
-    return reply;
+    try {
+      // Observe both outcomes before invoking send, including synchronous throws.
+      // A send failure must not abandon an independently rejecting reply promise.
+      const send = Promise.resolve().then(() => this.transport.send(frame));
+      const [, response] = await Promise.all([send, reply]);
+      return response;
+    } finally {
+      cleanup();
+    }
   }
 }

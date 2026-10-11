@@ -5,6 +5,7 @@ import { decodePairingMessage, encodePairingMessage } from "../codec/pairing.js"
 import {
   DefaultRemoteFeatures,
   RemoteMessage,
+  RemoteFeatures,
   decodeRemoteMessage,
   encodeRemoteMessage,
 } from "../codec/remote.js";
@@ -13,6 +14,10 @@ import { FrameTransport, createMemoryTransportPair } from "../transport/tls.js";
 export type FakeGoogleTvServerOptions = {
   pairingCode?: string;
   name?: string;
+  remoteFeatures?: number;
+  delayImeMetadata?: boolean;
+  imeCounter?: number;
+  fieldCounter?: number;
 };
 
 export class FakeGoogleTvServer extends EventEmitter {
@@ -20,6 +25,13 @@ export class FakeGoogleTvServer extends EventEmitter {
   readonly pairingCode: string;
   readonly remoteMessages: RemoteMessage[] = [];
   paired = false;
+  acceptedText = "";
+  private readonly remoteFeatures: number;
+  private readonly delayImeMetadata: boolean;
+  private imeCounter: number;
+  private fieldCounter: number;
+  private remoteTransport?: FrameTransport;
+  private imeMetadataSent = false;
   private nextVoiceSessionId = 100;
   private readonly certificate = randomBytes(64);
 
@@ -27,6 +39,10 @@ export class FakeGoogleTvServer extends EventEmitter {
     super();
     this.name = options.name ?? "Fake Google TV";
     this.pairingCode = options.pairingCode ?? "A1B2C3";
+    this.remoteFeatures = options.remoteFeatures ?? DefaultRemoteFeatures;
+    this.delayImeMetadata = options.delayImeMetadata ?? false;
+    this.imeCounter = options.imeCounter ?? 17;
+    this.fieldCounter = options.fieldCounter ?? 23;
   }
 
   createPairingTransport(): FrameTransport {
@@ -63,23 +79,39 @@ export class FakeGoogleTvServer extends EventEmitter {
   createRemoteTransport(): FrameTransport {
     const [client, server] = createMemoryTransportPair();
     server.connect();
+    this.remoteTransport = server;
     client.on("connect", async () => {
-      await server.send(
-        encodeRemoteMessage({ type: "configure", features: DefaultRemoteFeatures }),
-      );
+      await server.connect();
+      this.imeMetadataSent = false;
+      await server.send(encodeRemoteMessage({ type: "configure", features: this.remoteFeatures }));
     });
     server.on("frame", async (frame) => {
       const message = decodeRemoteMessage(frame);
       this.remoteMessages.push(message);
       this.emit("remoteMessage", message);
       if (message.type === "configure") {
-        await server.send(
-          encodeRemoteMessage({ type: "set-active", active: DefaultRemoteFeatures }),
-        );
+        await server.send(encodeRemoteMessage({ type: "set-active", active: message.features }));
       } else if (message.type === "set-active") {
         await server.send(encodeRemoteMessage({ type: "ready", started: true }));
+        if (!this.delayImeMetadata && (this.remoteFeatures & RemoteFeatures.ime) !== 0) {
+          await this.sendImeMetadata();
+        }
       } else if (message.type === "ping") {
         await server.send(encodeRemoteMessage({ type: "ping", sequence: message.sequence }));
+      } else if (message.type === "text") {
+        if (
+          this.imeMetadataSent &&
+          (this.remoteFeatures & RemoteFeatures.ime) !== 0 &&
+          message.imeCounter === this.imeCounter &&
+          message.fieldCounter === this.fieldCounter
+        ) {
+          this.acceptedText = message.text;
+          this.fieldCounter++;
+          await this.sendImeMetadata();
+          this.emit("textAccepted", this.acceptedText);
+        } else {
+          this.emit("textRejected", message);
+        }
       } else if (message.type === "key" && message.keyCode === 84 && message.action === "up") {
         await server.send(
           encodeRemoteMessage({
@@ -92,6 +124,28 @@ export class FakeGoogleTvServer extends EventEmitter {
       }
     });
     return client;
+  }
+
+  async sendImeMetadata(
+    imeCounter = this.imeCounter,
+    fieldCounter = this.fieldCounter,
+  ): Promise<void> {
+    if (!this.remoteTransport) throw new Error("fake remote connection has not started");
+    this.imeCounter = imeCounter;
+    this.fieldCounter = fieldCounter;
+    this.imeMetadataSent = true;
+    await this.remoteTransport.send(
+      encodeRemoteMessage({
+        type: "text",
+        text: this.acceptedText,
+        imeCounter,
+        fieldCounter,
+      }),
+    );
+  }
+
+  async closeRemoteConnection(): Promise<void> {
+    await this.remoteTransport?.close();
   }
 }
 

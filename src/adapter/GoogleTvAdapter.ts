@@ -49,7 +49,13 @@ export class GoogleTvDevice {
       cert: this.certificate?.cert,
       key: this.certificate?.key,
     });
-    await client.start();
+    try {
+      await client.start();
+    } catch (error) {
+      // A rejected start cannot return the session that would own this client.
+      await client.close();
+      throw error;
+    }
 
     return {
       serviceName: "androidtvremote2",
