@@ -24,9 +24,11 @@ const VoiceChunkMinSize = 8 * 1024;
 
 export class RemoteClient extends EventEmitter {
   private readonly transport: FrameTransport;
-  private activeFeatures = DefaultRemoteFeatures;
-  private imeCounter = 0;
-  private fieldCounter = 0;
+  private activeFeatures?: number;
+  private imeMetadata?: { imeCounter: number; fieldCounter: number };
+  private connectionGeneration = 0;
+  private connected = false;
+  private ready = false;
   private voiceSession?: VoiceSession;
   readonly messages: RemoteMessage[] = [];
 
@@ -37,13 +39,33 @@ export class RemoteClient extends EventEmitter {
         ? options.transport
         : new NodeTlsTransport({ ...options, port: options.port ?? 6466 });
     this.transport.on("frame", (frame) => this.handleFrame(frame));
-    this.transport.on("close", () => this.emit("close"));
-    this.transport.on("error", (error) => this.emit("error", error));
+    this.transport.on("close", () => {
+      this.invalidateConnection(new Error("remote connection closed"));
+      this.emit("close");
+    });
+    this.transport.on("error", (error) => {
+      this.invalidateConnection(error);
+      this.emit("error", error);
+    });
   }
 
   async connect(): Promise<void> {
-    await this.transport.connect();
-    await this.waitForReady();
+    if (this.connected && this.ready) return;
+    this.invalidateConnection(new Error("remote connection replaced"));
+    this.connected = true;
+    const generation = this.connectionGeneration;
+    try {
+      await this.transport.connect();
+      if (generation !== this.connectionGeneration || !this.connected) {
+        throw new Error("remote connection closed before Android TV service start");
+      }
+      await this.waitForReady();
+    } catch (error) {
+      if (generation === this.connectionGeneration) {
+        this.invalidateConnection(error instanceof Error ? error : new Error(String(error)));
+      }
+      throw error;
+    }
   }
 
   async command(key: RemoteKeyName | string): Promise<void> {
@@ -66,12 +88,12 @@ export class RemoteClient extends EventEmitter {
   }
 
   async text(text: string): Promise<void> {
-    await this.send({
-      type: "text",
-      text,
-      imeCounter: this.imeCounter,
-      fieldCounter: this.fieldCounter,
-    });
+    const generation = this.connectionGeneration;
+    await this.waitForImeMetadata();
+    if (generation !== this.connectionGeneration || !this.connected || !this.imeMetadata) {
+      throw new Error("remote connection changed before Android TV text input");
+    }
+    await this.send({ type: "text", text, ...this.imeMetadata });
   }
 
   async voiceBegin(timeoutMs = 5_000): Promise<VoiceSession> {
@@ -108,6 +130,7 @@ export class RemoteClient extends EventEmitter {
   }
 
   async close(): Promise<void> {
+    this.invalidateConnection(new Error("remote connection closed"));
     await this.transport.close();
   }
 
@@ -117,29 +140,85 @@ export class RemoteClient extends EventEmitter {
   }
 
   private handleFrame(frame: Uint8Array): void {
+    if (!this.connected) return;
+    const generation = this.connectionGeneration;
     const message = decodeRemoteMessage(frame);
     this.messages.push(message);
+    // Apply synchronous protocol state before consumers react to the message.
+    const handled = this.handleProtocolMessage(message);
     this.emit("message", message);
-    void this.handleProtocolMessage(message);
+    void handled.catch((error: Error) => {
+      if (generation !== this.connectionGeneration) return;
+      this.invalidateConnection(error);
+      this.emit("error", error);
+    });
   }
 
   private async handleProtocolMessage(message: RemoteMessage): Promise<void> {
     if (message.type === "configure") {
       this.activeFeatures = message.features & DefaultRemoteFeatures;
-      await this.send({ type: "configure", features: this.activeFeatures });
       if ((this.activeFeatures & RemoteFeatures.key) === 0) {
-        this.emit("error", new Error("TV remote service did not advertise key support"));
+        throw new Error("TV remote service did not advertise key support");
       }
+      await this.send({ type: "configure", features: this.activeFeatures });
     } else if (message.type === "set-active") {
-      await this.send({ type: "set-active", active: this.activeFeatures });
+      await this.send({ type: "set-active", active: this.activeFeatures ?? 0 });
     } else if (message.type === "ping") {
       await this.send({ type: "ping", sequence: message.sequence });
-    } else if (message.type === "text") {
-      this.imeCounter = message.imeCounter;
-      this.fieldCounter = message.fieldCounter;
+    } else if (message.type === "ready") {
+      this.ready = true;
+    } else if (
+      message.type === "text" &&
+      this.activeFeatures !== undefined &&
+      (this.activeFeatures & RemoteFeatures.ime) !== 0
+    ) {
+      this.imeMetadata = { imeCounter: message.imeCounter, fieldCounter: message.fieldCounter };
     } else if (message.type === "voice" && message.phase === "begin") {
       this.voiceSession = { sessionId: message.sessionId, packageName: message.packageName };
     }
+  }
+
+  private invalidateConnection(error: Error): void {
+    this.connectionGeneration++;
+    this.connected = false;
+    this.ready = false;
+    this.activeFeatures = undefined;
+    this.imeMetadata = undefined;
+    this.voiceSession = undefined;
+    this.emit("connection-ended", error);
+  }
+
+  private async waitForImeMetadata(timeoutMs = 5_000): Promise<void> {
+    if (!this.connected) throw new Error("remote connection is not connected");
+    if (this.activeFeatures !== undefined && (this.activeFeatures & RemoteFeatures.ime) === 0) {
+      throw new Error("TV remote service did not advertise text input support");
+    }
+    if (this.imeMetadata) return;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("timed out waiting for Android TV text input metadata"));
+      }, timeoutMs);
+      const onMessage = () => {
+        if (this.activeFeatures !== undefined && (this.activeFeatures & RemoteFeatures.ime) === 0) {
+          onEnd(new Error("TV remote service did not advertise text input support"));
+        } else if (this.imeMetadata) {
+          cleanup();
+          resolve();
+        }
+      };
+      const onEnd = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.off("message", onMessage);
+        this.off("connection-ended", onEnd);
+      };
+      this.on("message", onMessage);
+      this.on("connection-ended", onEnd);
+    });
   }
 
   private requireVoiceSession(): VoiceSession {
@@ -184,7 +263,7 @@ export class RemoteClient extends EventEmitter {
   }
 
   private async waitForReady(timeoutMs = 5_000): Promise<void> {
-    if (this.messages.some((message) => message.type === "ready")) return;
+    if (this.ready) return;
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         cleanup();
@@ -209,10 +288,12 @@ export class RemoteClient extends EventEmitter {
         this.off("message", onMessage);
         this.off("close", onClose);
         this.off("error", onError);
+        this.off("connection-ended", onError);
       };
       this.on("message", onMessage);
       this.on("close", onClose);
       this.on("error", onError);
+      this.on("connection-ended", onError);
     });
   }
 }
