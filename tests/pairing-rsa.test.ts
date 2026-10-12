@@ -21,6 +21,10 @@ function certificate(bits: number) {
     const keyPath = join(directory, "key.pem");
     execFileSync("openssl", [
       "req", "-x509", "-newkey", `rsa:${bits}`, "-nodes",
+      // OpenSSL's default SP800-56B generator divides the length equally
+      // between primes and rounds odd requests down. A legal small exponent
+      // selects its general RSA generator, which preserves the requested bits.
+      ...(bits % 2 === 1 ? ["-pkeyopt", "rsa_keygen_pubexp:17"] : []),
       "-keyout", keyPath, "-out", certPath,
       "-subj", "/CN=localhost", "-days", "1",
     ], { stdio: "pipe" });
