@@ -45,6 +45,8 @@ describe("certificate-bound pairing RSA integers", () => {
   ])("pairs with $clientBits-bit client and $serverBits-bit server keys", async ({ clientBits, serverBits }) => {
     const local = certificate(clientBits);
     const peer = certificate(serverBits);
+    expect(new X509Certificate(local.cert).publicKey.asymmetricKeyDetails?.modulusLength).toBe(clientBits);
+    expect(new X509Certificate(peer.cert).publicKey.asymmetricKeyDetails?.modulusLength).toBe(serverBits);
     const nonce = Buffer.from("0bdb", "hex");
     const hash = createHash("sha256");
     for (const bytes of [...publicNumbers(local.cert), ...publicNumbers(peer.cert), nonce]) {
@@ -82,6 +84,11 @@ describe("certificate-bound pairing RSA integers", () => {
     const client = new PairingClient({ ...local, host: "127.0.0.1", port: address.port, timeoutMs: 1000 });
     try {
       await client.start();
+      const wrongCode = `${(expectedSecret[0] ^ 0xff).toString(16).padStart(2, "0")}0bdb`;
+      await expect(client.submitCode(wrongCode)).rejects.toThrow(
+        "pairing code failed local certificate hash validation",
+      );
+      expect(receivedSecret).toBeUndefined();
       await expect(client.submitCode(code)).resolves.toMatchObject({ type: "secret-ack", status: "ok" });
       expect(Buffer.from(receivedSecret ?? [])).toEqual(expectedSecret);
     } finally {
