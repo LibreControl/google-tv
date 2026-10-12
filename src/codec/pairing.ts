@@ -160,10 +160,10 @@ export function derivePairingSecret(
   const normalized = code.trim().replaceAll(/\s/g, "").toUpperCase();
   const codeBytes = fromHex(normalized);
   const hash = createHash("sha256")
-    .update(fromHex(certificatesOrNonce.local.modulus))
-    .update(fromHex(padExponent(certificatesOrNonce.local.exponent)))
-    .update(fromHex(certificatesOrNonce.peer.modulus))
-    .update(fromHex(padExponent(certificatesOrNonce.peer.exponent)))
+    .update(fromHex(padRsaInteger(certificatesOrNonce.local.modulus)))
+    .update(fromHex(padRsaInteger(certificatesOrNonce.local.exponent)))
+    .update(fromHex(padRsaInteger(certificatesOrNonce.peer.modulus)))
+    .update(fromHex(padRsaInteger(certificatesOrNonce.peer.exponent)))
     .update(fromHex(normalized.slice(2)))
     .digest();
 
@@ -251,6 +251,8 @@ function certificatePartsFromPem(cert: string | Buffer): RsaCertificateParts {
   };
 }
 
-function padExponent(value: string): string {
+// OpenSSL BN_print (used by Node TLS) omits leading zero nibbles. Restore
+// the high partial byte before hex decoding; otherwise Buffer truncates it.
+function padRsaInteger(value: string): string {
   return value.length % 2 === 0 ? value : `0${value}`;
 }

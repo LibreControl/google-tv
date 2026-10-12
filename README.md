@@ -134,6 +134,20 @@ unhandled reply rejection.
 Closing a TLS transport also cancels an in-flight connection attempt. Frames and
 close/error events from a replaced socket cannot affect the current connection.
 
+Certificate-bound pairing hashes the unsigned RSA modulus and exponent bytes of
+the client and TV certificates from the same TLS session, followed by the code's
+two-byte nonce. Odd-length Node TLS modulus hex is left-padded by one zero nibble
+to preserve the high partial byte, not padded to a fixed key size. The code's
+checksum must still match before any secret is sent. This follows Google's
+[Polo challenge-response algorithm](https://android.googlesource.com/platform/external/google-tv-pairing-protocol/+/refs/heads/master/java/src/com/google/polo/pairing/PoloChallengeResponse.java).
+
+The real TLS regressions cover 2049-bit RSA client and server keys using an
+independent unsigned-byte JWK oracle. They do not establish the cause of the
+reported [Google TV Streamer failure](https://github.com/usrivastava92/gtv-desktop-remote/issues/140).
+Diagnosing that failure requires both public certificates and the exact displayed
+and submitted code from one failing pairing session, plus firmware and Remote
+Service versions and session start/close order. Never share private keys.
+
 ## Developer Docs
 
 - [Discovery](docs/discovery.md)

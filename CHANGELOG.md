@@ -12,6 +12,7 @@
 ### Bug Fixes
 
 - Reject refused TLS connections with the original socket error instead of throwing an unhandled error event and leaving `PairingClient.start()` pending ([#1](https://github.com/LibreControl/google-tv/issues/1)).
+- Preserve the high partial byte of odd-bit RSA moduli when deriving certificate-bound pairing secrets from Node TLS certificates. RSA keys with byte-aligned lengths and certificate-hash validation are unchanged. This fixes a protocol representation defect; Google TV Streamer interoperability remains unverified without a same-session certificate/code vector.
 
 # 1.0.0 (2026-05-31)
 
