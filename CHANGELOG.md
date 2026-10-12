@@ -1,3 +1,10 @@
+## [1.0.2](https://github.com/LibreControl/google-tv/compare/1.0.1...1.0.2) (2026-10-12)
+
+
+### Bug Fixes
+
+* preserve odd-length RSA modulus bytes in pairing hashes ([acff15c](https://github.com/LibreControl/google-tv/commit/acff15ce74a3d853e121fd2252494d3e282bcf7c))
+
 ## [1.0.1](https://github.com/LibreControl/google-tv/compare/1.0.0...1.0.1) (2026-10-11)
 
 ### Bug Fixes
